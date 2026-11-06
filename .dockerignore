@@ -1,0 +1,6 @@
+.data
+.venv
+terraform
+tests
+bench
+**/__pycache__
