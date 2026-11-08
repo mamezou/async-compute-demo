@@ -7,12 +7,14 @@ GET  /jobs/{job_id}   状態確認。終わっていれば結果を返す
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 import uuid
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app import backends, compute, metrics
 from app import storage as st
@@ -22,19 +24,38 @@ store = st.from_env()
 backend = backends.from_env(store)
 
 
-class SimulateRequest(BaseModel):
-    n_paths: int = Field(100_000, ge=1, le=5_000_000)
+class _Common(BaseModel):
     n_steps: int = Field(250, ge=1, le=1_000)
     n_assets: int = Field(20, ge=1, le=200)
-    seed: int = 42
+    seed: int = Field(42, ge=0)  # NumPy の乱数の種は 0 以上
     method: Literal["naive", "vectorized"] = "vectorized"
 
 
-class JobRequest(SimulateRequest):
+# 同期で受ける計算量（パス数 × 日数 × 資産数）の上限。既定の 5 億は 10 万パス × 250 日 × 20 資産で、
+# 4 コアの PC で約 9 秒。ALB のタイムアウト（60 秒）に余裕を持って収まる大きさにしておく。
+SYNC_MAX_WORK = int(os.environ.get("SYNC_MAX_WORK", "500000000"))
+
+
+class SimulateRequest(_Common):
+    n_paths: int = Field(100_000, ge=1, le=5_000_000)
+
+    @model_validator(mode="after")
+    def _fits_sync(self) -> "SimulateRequest":
+        if self.n_paths * self.n_steps * self.n_assets > SYNC_MAX_WORK:
+            raise ValueError(f"too large for a synchronous call (n_paths * n_steps * n_assets > {SYNC_MAX_WORK}); use POST /jobs")
+        return self
+
+
+class JobRequest(_Common):
+    n_paths: int = Field(100_000, ge=1, le=5_000_000)
     chunks: int = Field(8, ge=1, le=1_000, description="並列に動かすワーカー数")
 
 
-def _params(req: SimulateRequest) -> compute.Params:
+# 同期計算を同時にいくつまで受けるか。超えた分は待たせずに 429 を返す。
+_sync_slots = threading.BoundedSemaphore(int(os.environ.get("SYNC_MAX_CONCURRENCY", "1")))
+
+
+def _params(req: SimulateRequest | JobRequest) -> compute.Params:
     return compute.Params(req.n_paths, req.n_steps, req.n_assets, req.seed)
 
 
@@ -43,12 +64,20 @@ def health() -> dict:
     return {"ok": True}
 
 
-# async def にすると、この重い計算がイベントループを止めて他のリクエストも待たされる。
-# def にすればスレッドプールで動くが、CPU を食い合うのは変わらない。
+# 同期 API の限界を示すエンドポイント。
+# - async def にすると、計算中はイベントループが止まり、/health を含む他のリクエストが全部待たされる。
+# - def にするとスレッドプール（既定 40 本）で動くのでイベントループは止まらない。ただし CPU は
+#   食い合い、重いリクエストが重なるとスレッドを使い切る。ALB が 60 秒で接続を切っても計算は続く。
+# そこで同時実行数とパス数に上限をかけ、超えたら 429 を返す。これ以上の計算は /jobs に回す。
 @app.post("/simulate")
 def simulate(req: SimulateRequest) -> dict:
-    t0 = time.perf_counter()
-    summary = compute.simulate(_params(req), req.method)
+    if not _sync_slots.acquire(blocking=False):
+        raise HTTPException(429, "busy: use POST /jobs", headers={"Retry-After": "5"})
+    try:
+        t0 = time.perf_counter()
+        summary = compute.simulate(_params(req), req.method)
+    finally:
+        _sync_slots.release()
     elapsed_ms = (time.perf_counter() - t0) * 1000
     metrics.emit({"SyncDuration": (elapsed_ms, "Milliseconds")}, {"Phase": "sync"}, method=req.method)
     return {"summary": summary, "elapsed_ms": round(elapsed_ms)}

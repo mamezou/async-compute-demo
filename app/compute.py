@@ -15,9 +15,15 @@ import pandas as pd
 # 乱数はブロック単位で生成する。ブロック b は seed と b から決まるので、
 # どのワーカーがどのブロックを担当しても結果が同じになる。
 BLOCK_SIZE = 5_000
-# 速い実装で一度に展開するパス数。メモリ使用量はおよそ
-# SUB_BATCH * n_steps * n_assets * 8 バイト（既定値で 40MB）。
-SUB_BATCH = 1_000
+# 速い実装で一度に展開する乱数の上限（バイト）。1 パスの乱数は n_steps * n_assets * 8 バイトなので、
+# 一度に展開するパス数はこれを割って決める（既定の 250 日 × 20 資産なら 1,000 パスで 40MB）。
+# パス数で固定すると、日数や資産数が多い入力でメモリが足りなくなる。
+SUB_BATCH_BYTES = 40 * 1024 * 1024
+
+
+def sub_batch(p: "Params") -> int:
+    """一度に展開するパス数。SUB_BATCH_BYTES に収まる最大の数（最低 1）。"""
+    return max(1, SUB_BATCH_BYTES // (p.n_steps * p.n_assets * 8))
 
 
 @dataclass(frozen=True)
@@ -66,13 +72,14 @@ def block_naive(p: Params, b: int) -> np.ndarray:
 
 
 def block_vectorized(p: Params, b: int) -> np.ndarray:
-    """チューニング後の実装。SUB_BATCH 本ずつまとめて NumPy で計算する。"""
+    """チューニング後の実装。sub_batch(p) 本ずつまとめて NumPy で計算する。"""
     mu, sigma, w = market(p)
     rng = np.random.default_rng([p.seed, b])
     n = _block_paths(p, b)
     losses = np.empty(n)
-    for start in range(0, n, SUB_BATCH):
-        m = min(SUB_BATCH, n - start)
+    size = sub_batch(p)
+    for start in range(0, n, size):
+        m = min(size, n - start)
         z = rng.standard_normal((m, p.n_steps, p.n_assets))
         z *= sigma
         z += 1.0 + mu

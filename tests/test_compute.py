@@ -44,3 +44,45 @@ def test_api_sync_and_async_agree(tmp_path, monkeypatch):
         time.sleep(0.1)
     assert r["status"] == "SUCCEEDED", r
     assert r["summary"] == sync
+
+
+def test_sub_batch_fits_memory_budget_at_max_input():
+    p = compute.Params(n_paths=5_000, n_steps=1_000, n_assets=200)
+    assert compute.sub_batch(p) * p.n_steps * p.n_assets * 8 <= compute.SUB_BATCH_BYTES
+
+
+def test_sub_batch_size_does_not_change_result(monkeypatch):
+    p = compute.Params(n_paths=3_000, n_steps=30, n_assets=5, seed=3)
+    base = compute.run_chunk(p)
+    monkeypatch.setattr(compute, "SUB_BATCH_BYTES", 30 * 5 * 8 * 7)  # 7 パスずつ
+    np.testing.assert_allclose(compute.run_chunk(p), base, rtol=1e-12)
+
+
+def _client(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("BUCKET", raising=False)
+    monkeypatch.delenv("BATCH_JOB_QUEUE", raising=False)
+    import importlib
+
+    from app import api
+
+    importlib.reload(api)
+    return api, TestClient(api.app)
+
+
+def test_sync_rejects_large_input_and_bad_seed(tmp_path, monkeypatch):
+    api, client = _client(tmp_path, monkeypatch)
+    assert client.post("/simulate", json={"n_paths": 100_000, "n_steps": 1_000, "n_assets": 200}).status_code == 422
+    assert client.post("/simulate", json={"n_paths": 100, "seed": -1}).status_code == 422
+    # 同じ大きさでも /jobs の入力としては正しい（計算は走らせない）
+    api.JobRequest(n_paths=100_000, n_steps=1_000, n_assets=200)
+
+
+def test_sync_returns_429_when_busy(tmp_path, monkeypatch):
+    api, client = _client(tmp_path, monkeypatch)
+    assert api._sync_slots.acquire(blocking=False)  # 別のリクエストが計算中の状態を作る
+    try:
+        r = client.post("/simulate", json={"n_paths": 100})
+        assert r.status_code == 429 and r.headers["retry-after"] == "5"
+    finally:
+        api._sync_slots.release()

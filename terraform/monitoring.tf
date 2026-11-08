@@ -15,7 +15,7 @@ resource "aws_cloudwatch_dashboard" "this" {
           stat   = "p50"
           metrics = [
             ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.api.arn_suffix, { stat = "p50" }],
-            ["...", { stat = "p99" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.api.arn_suffix, { stat = "p99" }],
           ]
         }
       },
@@ -48,7 +48,7 @@ resource "aws_cloudwatch_dashboard" "this" {
           region = var.region
           metrics = [
             [local.ns, "JobTurnaround", "Phase", "reduce", { stat = "p50" }],
-            ["...", { stat = "Maximum" }],
+            [local.ns, "JobTurnaround", "Phase", "reduce", { stat = "Maximum" }],
           ]
         }
       },
