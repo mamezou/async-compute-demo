@@ -57,6 +57,7 @@ resource "aws_ecs_task_definition" "api" {
       { name = "BUCKET", value = aws_s3_bucket.jobs.bucket },
       { name = "BATCH_JOB_QUEUE", value = aws_batch_job_queue.this.name },
       { name = "BATCH_JOB_DEFINITION", value = aws_batch_job_definition.worker.name },
+      { name = "DASHBOARD_NAME", value = var.name }, # 画面からダッシュボードへのリンク用
     ]
     logConfiguration = {
       logDriver = "awslogs"

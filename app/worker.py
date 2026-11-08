@@ -36,7 +36,7 @@ def run_chunk(store, job_id: str, index: int, n_chunks: int) -> dict:
         chunk=index,
         chunks=n_chunks,
     )
-    return {"index": index, "paths": int(losses.size), "ms": elapsed_ms}
+    return {"index": index, "paths": int(losses.size), "ms": elapsed_ms, "peak_mb": metrics.peak_rss_mb()}
 
 
 def run_reduce(store, job_id: str, n_chunks: int) -> dict:

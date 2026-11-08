@@ -86,3 +86,20 @@ def test_sync_returns_429_when_busy(tmp_path, monkeypatch):
         assert r.status_code == 429 and r.headers["retry-after"] == "5"
     finally:
         api._sync_slots.release()
+
+
+def test_page_progress_and_metrics(tmp_path, monkeypatch):
+    _, client = _client(tmp_path, monkeypatch)
+    page = client.get("/").text
+    assert "同期 API と非同期ジョブ" in page
+    assert client.get("/config").json()["on_aws"] is False
+    job = client.post("/jobs", json={"n_paths": 12_000, "n_steps": 30, "n_assets": 5, "chunks": 3}).json()
+    for _ in range(100):
+        r = client.get(f"/jobs/{job['job_id']}").json()
+        if r["status"] == "SUCCEEDED":
+            break
+        assert r["progress"]["total"] == 3
+        time.sleep(0.1)
+    assert r["status"] == "SUCCEEDED"
+    series = client.get("/metrics").json()["series"]
+    assert len(series["ChunkDuration"]) >= 3 and series["JobTurnaround"]

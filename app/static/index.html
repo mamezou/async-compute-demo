@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>同期 API と非同期ジョブの処理時間</title>
+<style>
+/* GitHub Primer に合わせた見本。値は @primer/primitives 11.10.0 の light テーマから書き写した（CDN を読まずに動くように）。
+   変数名は Primer のトークン名に合わせ、元の画面の JavaScript が参照する変数（--key など）はそれに対応づける */
+:root{
+  --bgColor-default:#ffffff;
+  --bgColor-muted:#f6f8fa;
+  --fgColor-default:#1f2328;
+  --fgColor-muted:#59636e;
+  --fgColor-accent:#0969da;
+  --fgColor-success:#1a7f37;
+  --fgColor-attention:#9a6700;
+  --fgColor-danger:#d1242f;
+  --fgColor-onEmphasis:#ffffff;
+  --borderColor-default:#d1d9e0;
+  --borderColor-muted:#d1d9e0b3;
+  --borderColor-emphasis:#818b98;
+  --bgColor-success-emphasis:#1f883d;
+  --bgColor-attention-emphasis:#9a6700;
+  --bgColor-danger-emphasis:#cf222e;
+  --focus-outlineColor:#0969da;
+  --data-blue-color-emphasis:#006edb;
+  /* Button（default / primary） */
+  --button-default-fgColor-rest:#25292e;
+  --button-default-bgColor-rest:#f6f8fa;
+  --button-default-bgColor-hover:#eff2f5;
+  --button-default-bgColor-active:#e6eaef;
+  --button-default-borderColor-rest:#d1d9e0;
+  --button-primary-bgColor-rest:#1f883d;
+  --button-primary-bgColor-hover:#1c8139;
+  --button-primary-bgColor-active:#197935;
+  --button-primary-bgColor-disabled:#95d8a6;
+  --button-primary-borderColor-rest:#1f232826;
+  --button-primary-fgColor-disabled:#ffffffcc;
+  --borderRadius-small:3px;
+  --borderRadius-medium:6px;
+  --control-medium-size:32px;
+  --fontStack-system:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;
+  --fontStack-monospace:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+
+  /* 元の画面の JavaScript とインライン style が参照する名前 */
+  --text:var(--fgColor-default);
+  --sub:var(--fgColor-muted);
+  --key:var(--data-blue-color-emphasis);   /* グラフの線：データ用の色 */
+  --line-light:var(--borderColor-default);  /* グラフの軸：borderColor-default */
+  --font:var(--fontStack-system);
+  /* 並列の内訳の状態（塗りは 3:1 以上、白は 3:1 以上の線で囲む） */
+  --wait:var(--bgColor-default);
+  --run:var(--bgColor-attention-emphasis);
+  --done:var(--bgColor-success-emphasis);
+  --fail:var(--bgColor-danger-emphasis);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bgColor-default);color:var(--fgColor-default);font-family:var(--fontStack-system);font-size:14px;line-height:1.5}
+main{max-width:1012px;margin:0 auto;padding:32px 24px 48px;display:grid;gap:32px}
+h1{font-size:24px;line-height:1.25;font-weight:600;margin:0;padding-bottom:16px;border-bottom:1px solid var(--borderColor-default)}
+h2{font-size:20px;line-height:1.25;font-weight:600;margin:0 0 16px;padding-bottom:8px;border-bottom:1px solid var(--borderColor-muted)}
+.num{font-variant-numeric:tabular-nums}
+code,.mono{font-family:var(--fontStack-monospace);font-size:12px}
+
+/* FormControl / Select / Button */
+.form{display:flex;flex-wrap:wrap;gap:16px;align-items:end}
+label{display:grid;gap:4px;font-size:14px;font-weight:600}
+select{font:inherit;font-weight:400;color:var(--fgColor-default);background:var(--bgColor-default) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='%2359636e'%3E%3Cpath d='m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z'/%3E%3C/svg%3E") no-repeat right 8px center;appearance:none;border:1px solid var(--borderColor-default);border-radius:var(--borderRadius-medium);height:var(--control-medium-size);padding:0 32px 0 12px;min-width:10rem}
+button{font:inherit;font-size:14px;font-weight:500;line-height:20px;cursor:pointer;border-radius:var(--borderRadius-medium);height:var(--control-medium-size);padding:0 12px;border:1px solid;white-space:nowrap}
+button.primary{background:var(--button-primary-bgColor-rest);border-color:var(--button-primary-borderColor-rest);color:var(--fgColor-onEmphasis)}
+button.primary:hover{background:var(--button-primary-bgColor-hover)}
+button.primary:active{background:var(--button-primary-bgColor-active)}
+button.primary:disabled{background:var(--button-primary-bgColor-disabled);color:var(--button-primary-fgColor-disabled);cursor:not-allowed}
+button.secondary{background:var(--button-default-bgColor-rest);border-color:var(--button-default-borderColor-rest);color:var(--button-default-fgColor-rest);height:28px;padding:0 8px;font-size:12px}
+button.secondary:hover{background:var(--button-default-bgColor-hover)}
+button.secondary:active{background:var(--button-default-bgColor-active)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--focus-outlineColor);outline-offset:-2px}
+a:focus-visible{outline:2px solid var(--focus-outlineColor);outline-offset:2px;border-radius:var(--borderRadius-small)}
+
+/* InlineMessage（warning）：文字色と警告アイコンだけで示す */
+.hint{display:flex;gap:8px;align-items:flex-start;margin:8px 0 0;color:var(--fgColor-attention);font-size:14px}
+.hint::before{content:"";flex:none;width:16px;height:16px;margin-top:2px;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z'/%3E%3C/svg%3E") center/16px no-repeat;
+          mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z'/%3E%3C/svg%3E") center/16px no-repeat}
+.hint:empty{display:none}
+
+/* DataTable：外枠 1px・角丸 6px、見出し行は bgColor-muted、行の区切りは borderColor-muted */
+.tbl{overflow-x:auto;border:1px solid var(--borderColor-default);border-radius:var(--borderRadius-medium)}
+table{border-collapse:collapse;width:100%}
+th,td{padding:8px 16px;text-align:left;vertical-align:top;border-top:1px solid var(--borderColor-muted)}
+thead th{background:var(--bgColor-muted);color:var(--fgColor-muted);font-weight:600;font-size:12px;border-top:0;border-bottom:1px solid var(--borderColor-default)}
+tbody tr:first-child th,tbody tr:first-child td{border-top:0}
+tbody th{font-weight:600;white-space:nowrap;width:11em}
+td.r,th.r{text-align:right}
+.big{font-size:20px;font-weight:600;line-height:1.5;font-variant-numeric:tabular-nums}
+.cells{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px}
+.cells span{width:16px;height:16px;border-radius:var(--borderRadius-small);border:1px solid var(--borderColor-emphasis);background:var(--wait)}
+.cells .running{background:var(--run);border-color:var(--run)} .cells .succeeded{background:var(--done);border-color:var(--done)} .cells .failed{background:var(--fail);border-color:var(--fail)}
+#progressText{color:var(--fgColor-muted)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--fgColor-muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:var(--borderRadius-small);border:1px solid var(--borderColor-emphasis);margin-right:4px;vertical-align:-1px}
+.summary{margin:16px 0 0;font-weight:600}
+.summary:empty{display:none}
+
+/* グラフ：1 本の系列なので凡例は付けず見出しで示す。線 2px、軸 borderColor-default、文字 fgColor-muted */
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media (max-width:768px){.charts{grid-template-columns:1fr}}
+.chart h3{font-size:14px;font-weight:600;margin:0;display:flex;justify-content:space-between;gap:8px}
+.chart h3 .num{font-weight:400;color:var(--fgColor-muted)}
+.chart svg{width:100%;height:120px;display:block;margin-top:8px}
+.chart svg rect{rx:2px;ry:2px} /* 目印は円（Primer：最初の系列は circle） */
+.chart text{font:12px var(--fontStack-system);fill:var(--fgColor-muted)}
+.links{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-top:16px;font-size:12px}
+.links .src{color:var(--fgColor-muted)}
+a{color:var(--fgColor-accent);text-decoration:none}
+a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+  <h1>同期 API と非同期ジョブの処理時間（VaR 計算、250 日 × 20 資産）</h1>
+
+  <section>
+    <div class="form">
+      <label for="paths">パス数
+        <select id="paths"><option value="20000">20,000</option><option value="100000" selected>100,000</option><option value="1000000">1,000,000</option><option value="2000000">2,000,000</option></select></label>
+      <label for="chunks">非同期の並列数
+        <select id="chunks"><option>4</option><option selected>8</option><option>16</option></select></label>
+      <button class="primary" id="run">両方を同時に実行</button>
+    </div>
+    <p class="hint" id="hint"></p>
+  </section>
+
+  <section>
+    <h2>実行中の状態</h2>
+    <div class="tbl"><table>
+      <thead><tr><th></th><th>同期（POST /simulate）</th><th>非同期（POST /jobs）</th></tr></thead>
+      <tbody>
+        <tr><th>状態</th><td id="syncState">未実行</td><td id="asyncState">未実行</td></tr>
+        <tr><th>経過時間</th><td class="big" id="syncTime">–</td><td class="big" id="asyncTime">–</td></tr>
+        <tr><th>応答までの時間</th><td class="num" id="syncAccept">–</td><td class="num" id="accept">–</td></tr>
+        <tr><th>並列の内訳</th><td>1 プロセス</td><td>
+          <div class="cells" id="cells"></div>
+          <div class="num" id="progressText"></div>
+        </td></tr>
+        <tr><th>VaR99</th><td class="num" id="syncVar">–</td><td class="num" id="asyncVar">–</td></tr>
+      </tbody>
+    </table></div>
+    <div class="legend">
+      <span>並列の内訳：1 マスが Batch の配列ジョブの子 1 つ</span>
+      <span><i style="background:var(--wait)"></i>待ち</span><span><i style="background:var(--run)"></i>計算中</span><span><i style="background:var(--done)"></i>完了</span><span><i style="background:var(--fail)"></i>失敗</span>
+    </div>
+    <p class="summary" id="summary"></p>
+  </section>
+
+  <section>
+    <h2>この画面で実行した結果</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>時刻</th><th class="r">パス数</th><th class="r">並列数</th><th class="r">同期（秒）</th><th class="r">非同期（秒）</th><th class="r">VaR99</th></tr></thead>
+      <tbody id="history"><tr><td colspan="6">なし</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>CloudWatch のメトリクス（直近 60 分、1 分ごとの最大値）</h2>
+    <div class="charts" id="charts"></div>
+    <div class="links"><span class="src" id="source"></span><span id="links"></span><button class="secondary" id="reload">更新</button></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let cfg = {sync_max_work: 5e8, on_aws: false};
+const STEPS = 250, ASSETS = 20;
+const sec = s => s.toFixed(1) + ' 秒';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function timer(el, t0){ const h = setInterval(() => el.textContent = sec((performance.now()-t0)/1000), 100); return () => clearInterval(h); }
+
+function updateHint(){
+  const n = +$('paths').value;
+  $('hint').textContent = n*STEPS*ASSETS > cfg.sync_max_work ? 'この大きさは同期では受け付けない（422）。非同期だけが計算する。' : '';
+}
+
+async function runSync(n){
+  const t0 = performance.now(), stop = timer($('syncTime'), t0);
+  $('syncState').textContent = '計算中（応答待ち）'; $('syncVar').textContent = '–'; $('syncAccept').textContent = '–';
+  try{
+    const r = await fetch('/simulate', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({n_paths:n})});
+    const s = (performance.now()-t0)/1000; stop(); $('syncTime').textContent = sec(s); $('syncAccept').textContent = sec(s);
+    if(r.status === 422){ $('syncState').textContent = '受付不可（422：計算量の上限を超過）'; $('syncTime').textContent = '–'; return null; }
+    if(r.status === 429){ $('syncState').textContent = '受付不可（429：ほかの同期計算が実行中）'; return null; }
+    if(!r.ok){ $('syncState').textContent = 'エラー（' + r.status + '）'; return null; }
+    const j = await r.json();
+    $('syncState').textContent = '完了'; $('syncVar').textContent = j.summary.var_99.toFixed(6);
+    return {sec: s, var99: j.summary.var_99};
+  }catch(e){ stop(); $('syncState').textContent = '通信エラー'; return null; }
+}
+
+function drawCells(p){
+  const box = $('cells'); box.innerHTML = '';
+  for(const [k,c] of [['succeeded',p.succeeded||0],['running',p.running||0],['failed',p.failed||0],['waiting',p.waiting||0]])
+    for(let i=0;i<c;i++){ const s=document.createElement('span'); s.className=k; box.appendChild(s); }
+  $('progressText').textContent = p.total ? `完了 ${p.succeeded||0} / ${p.total}、計算中 ${p.running||0}` : '';
+}
+
+async function runAsync(n, chunks){
+  const t0 = performance.now(), stop = timer($('asyncTime'), t0);
+  $('asyncState').textContent = '投入中'; $('asyncVar').textContent = '–'; $('accept').textContent = '–';
+  try{
+    const r = await fetch('/jobs', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({n_paths:n, chunks})});
+    $('accept').textContent = ((performance.now()-t0)/1000).toFixed(2) + ' 秒（' + r.status + '）';
+    if(!r.ok){ stop(); $('asyncState').textContent = 'エラー（' + r.status + '）'; return null; }
+    const job = await r.json();
+    drawCells({total: job.chunks, waiting: job.chunks});
+    while(true){
+      await sleep(cfg.on_aws ? 2000 : 300);
+      const s = await (await fetch('/jobs/' + job.job_id)).json();
+      if(s.progress) drawCells(s.progress);
+      const p = s.progress || {};
+      if(s.status === 'SUCCEEDED'){
+        const t = (performance.now()-t0)/1000; stop(); $('asyncTime').textContent = sec(t);
+        drawCells({total: job.chunks, succeeded: job.chunks});
+        $('asyncState').textContent = '完了（ジョブ ' + job.job_id + '）'; $('asyncVar').textContent = s.summary.var_99.toFixed(6);
+        return {sec: t, var99: s.summary.var_99, chunks: job.chunks};
+      }
+      if(s.status === 'FAILED'){ stop(); $('asyncState').textContent = '失敗（ジョブ ' + job.job_id + '）'; return null; }
+      $('asyncState').textContent = (s.status === 'QUEUED' ? 'ワーカーの起動待ち' : p.total && p.succeeded === p.total ? '集約中' : '並列で計算中') + '（ジョブ ' + job.job_id + '）';
+    }
+  }catch(e){ stop(); $('asyncState').textContent = '通信エラー'; return null; }
+}
+
+function summarize(s, a){
+  if(s && a){
+    const same = s.var99 === a.var99 ? 'VaR99 は一致。' : 'VaR99 が一致しない。';
+    return same + (a.sec < s.sec ? `非同期は同期の ${(s.sec/a.sec).toFixed(1)} 倍速い。` : `同期の方が ${(a.sec-s.sec).toFixed(0)} 秒速い（非同期はワーカーの起動を待つ）。`);
+  }
+  if(a) return `同期では受け付けない大きさを、非同期の ${a.chunks} 並列で ${a.sec.toFixed(0)} 秒で計算した。`;
+  return '';
+}
+
+const history = [];
+$('run').onclick = async () => {
+  const n = +$('paths').value, chunks = +$('chunks').value;
+  $('run').disabled = true; $('summary').textContent = '';
+  const [s, a] = await Promise.all([runSync(n), runAsync(n, chunks)]);
+  $('run').disabled = false;
+  $('summary').textContent = summarize(s, a);
+  history.unshift({t:new Date().toLocaleTimeString('ja-JP'), n, chunks: a ? a.chunks : chunks, s: s && s.sec, a: a && a.sec, v: (a||s||{}).var99});
+  $('history').innerHTML = history.map(h => `<tr><td class="num">${h.t}</td><td class="r num">${h.n.toLocaleString()}</td><td class="r num">${h.chunks}</td><td class="r num">${h.s ? h.s.toFixed(1) : '–'}</td><td class="r num">${h.a ? h.a.toFixed(1) : '–'}</td><td class="r num">${h.v ? h.v.toFixed(6) : '–'}</td></tr>`).join('');
+  setTimeout(loadMetrics, 1500);
+};
+
+const CHARTS = [
+  ['SyncDuration', '同期：API 内の計算時間', 'ms'],
+  ['JobTurnaround', '非同期：投入から結果まで', 'ms'],
+  ['ChunkDuration', 'ワーカー 1 つの計算時間', 'ms'],
+  ['PeakMemory', 'ワーカー 1 つのピークメモリ', 'MB'],
+];
+
+function chart(points, unit){
+  const W=440,H=120,l=44,r=8,t=8,b=18;
+  if(!points.length) return `<svg viewBox="0 0 ${W} ${H}"><text x="${l}" y="${H/2}">値なし</text></svg>`;
+  const x0 = Date.now()/1000 - 3600;
+  const vs = points.map(p => unit==='ms' ? p[1]/1000 : p[1]);
+  const top = Math.max(...vs) || 1, max = top*1.15;
+  const X = s => l + Math.max(0,(s-x0))/3600*(W-l-r), Y = v => t + (1-v/max)*(H-t-b);
+  const u = unit==='ms' ? '秒' : 'MB';
+  let g = `<line x1="${l}" y1="${H-b}" x2="${W-r}" y2="${H-b}" stroke="var(--line-light)"/><line x1="${l}" y1="${t}" x2="${l}" y2="${H-b}" stroke="var(--line-light)"/>`;
+  g += `<text x="${l-4}" y="${Y(top)+3}" text-anchor="end">${top.toFixed(unit==='ms'?1:0)}${u}</text><text x="${l-4}" y="${H-b}" text-anchor="end">0</text>`;
+  g += `<text x="${l}" y="${H-3}">60 分前</text><text x="${W-r}" y="${H-3}" text-anchor="end">現在</text>`;
+  const pts = points.map((p,i) => [X(p[0]), Y(vs[i])]);
+  if(pts.length > 1) g += `<polyline points="${pts.map(p=>p.join(',')).join(' ')}" fill="none" stroke="var(--key)" stroke-width="2"/>`;
+  pts.forEach(p => g += `<rect x="${p[0]-2}" y="${p[1]-2}" width="4" height="4" fill="var(--key)"/>`);
+  return `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+}
+
+async function loadMetrics(){
+  try{
+    const m = await (await fetch('/metrics?minutes=60')).json();
+    $('source').textContent = m.source === 'cloudwatch' ? '取得元：CloudWatch（GetMetricData）' : '取得元：この API のプロセス（ローカル実行）';
+    $('charts').innerHTML = CHARTS.map(([k,title,unit]) => {
+      const pts = m.series[k] || [], last = pts.at(-1);
+      const v = last ? (unit==='ms' ? (last[1]/1000).toFixed(1)+' 秒' : last[1].toFixed(0)+' MB') : '';
+      return `<div class="chart"><h3><span>${title}</span><span class="num">${v}</span></h3>${chart(pts, unit)}</div>`;
+    }).join('');
+  }catch(e){ $('source').textContent = 'メトリクスを取得できない'; }
+}
+
+(async () => {
+  try{ cfg = await (await fetch('/config')).json(); }catch(e){}
+  const links = [];
+  if(cfg.dashboard_url) links.push(`<a href="${cfg.dashboard_url}" target="_blank" rel="noopener">CloudWatch ダッシュボード</a>`);
+  if(cfg.batch_jobs_url) links.push(`<a href="${cfg.batch_jobs_url}" target="_blank" rel="noopener">AWS Batch のジョブ一覧</a>`);
+  $('links').innerHTML = links.join('　');
+  drawCells({total: +$('chunks').value, waiting: +$('chunks').value}); $('progressText').textContent = '';
+  updateHint(); loadMetrics();
+  setInterval(loadMetrics, 30000);
+})();
+$('paths').onchange = updateHint;
+$('chunks').onchange = () => { if(!$('run').disabled) { drawCells({total: +$('chunks').value, waiting: +$('chunks').value}); $('progressText').textContent = ''; } };
+$('reload').onclick = loadMetrics;
+</script>
+</body>
+</html>

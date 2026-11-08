@@ -14,6 +14,9 @@ import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
 
+import time
+
+from app import metrics
 from app import storage as st
 from app import worker
 
@@ -29,7 +32,7 @@ class LocalBackend:
         self.pool = ProcessPoolExecutor(max_workers=max_workers, mp_context=multiprocessing.get_context("spawn"))
 
     def submit(self, job_id: str, n_chunks: int) -> dict:
-        st.put_json(self.store, st.meta_key(job_id), {"backend": "local", "status": "RUNNING"})
+        st.put_json(self.store, st.meta_key(job_id), {"backend": "local", "status": "RUNNING", "n_chunks": n_chunks})
         threading.Thread(target=self._run, args=(job_id, n_chunks), daemon=True).start()
         return {"backend": "local"}
 
@@ -38,13 +41,22 @@ class LocalBackend:
         try:
             futures = [self.pool.submit(_local_chunk, root, job_id, i, n_chunks) for i in range(n_chunks)]
             for f in futures:
-                f.result()
+                r = f.result()
+                # 子プロセスのメトリクスはここに届かないので、親で覚えておく（画面に出す用）
+                metrics.record("ChunkDuration", r["ms"], "chunk")
+                metrics.record("PeakMemory", r["peak_mb"], "chunk")
             worker.run_reduce(self.store, job_id, n_chunks)
         except Exception as e:  # noqa: BLE001  デモなので失敗内容をそのまま残す
-            st.put_json(self.store, st.meta_key(job_id), {"backend": "local", "status": "FAILED", "error": repr(e)})
+            meta = {"backend": "local", "status": "FAILED", "n_chunks": n_chunks, "error": repr(e)}
+            st.put_json(self.store, st.meta_key(job_id), meta)
 
     def status(self, job_id: str) -> dict:
-        return st.get_json(self.store, st.meta_key(job_id))
+        meta = st.get_json(self.store, st.meta_key(job_id))
+        n = meta.get("n_chunks", 0)
+        done = sum(self.store.exists(st.part_key(job_id, i)) for i in range(n))
+        workers = self.pool._max_workers  # noqa: SLF001  同時に動くのはプールの大きさまで
+        running = min(n - done, workers) if meta["status"] == "RUNNING" else 0
+        return {**meta, "progress": {"total": n, "succeeded": done, "running": running, "waiting": n - done - running}}
 
 
 class BatchBackend:
@@ -75,7 +87,7 @@ class BatchBackend:
             dependsOn=[{"jobId": chunk_job}],  # 配列ジョブの全要素が成功してから動く
             containerOverrides={"command": [*base, "reduce", *args]},
         )["jobId"]
-        meta = {"backend": "batch", "chunk_job": chunk_job, "reduce_job": reduce_job}
+        meta = {"backend": "batch", "chunk_job": chunk_job, "reduce_job": reduce_job, "n_chunks": n_chunks}
         st.put_json(self.store, st.meta_key(job_id), meta)
         return meta
 
@@ -84,17 +96,25 @@ class BatchBackend:
         jobs = self.batch.describe_jobs(jobs=[meta["chunk_job"], meta["reduce_job"]])["jobs"]
         by_id = {j["jobId"]: j for j in jobs}
         chunk, reduce = by_id.get(meta["chunk_job"], {}), by_id.get(meta["reduce_job"], {})
-        if "FAILED" in (chunk.get("status"), reduce.get("status")):
+        n = meta.get("n_chunks", 1)
+        # 配列ジョブの親は、子が動いている間も PENDING のまま。子の集計（statusSummary）を見る
+        summary = chunk.get("arrayProperties", {}).get("statusSummary")
+        if summary is None:  # 配列にしていない（chunks=1）ときは、ジョブ 1 つの状態をそのまま数える
+            summary = {chunk.get("status", "SUBMITTED"): 1}
+        progress = {
+            "total": n,
+            "succeeded": summary.get("SUCCEEDED", 0),
+            "running": summary.get("RUNNING", 0) + summary.get("STARTING", 0),
+            "failed": summary.get("FAILED", 0),
+        }
+        progress["waiting"] = n - progress["succeeded"] - progress["running"] - progress["failed"]
+        if "FAILED" in (chunk.get("status"), reduce.get("status")) or progress["failed"]:
             status = "FAILED"
-        elif chunk.get("status") in ("SUCCEEDED", "RUNNING") or reduce.get("status") == "RUNNING":
+        elif progress["running"] or progress["succeeded"] or reduce.get("status") in ("STARTING", "RUNNING"):
             status = "RUNNING"
         else:
             status = "QUEUED"
-        return {
-            **meta,
-            "status": status,
-            "chunks": chunk.get("arrayProperties", {}).get("statusSummary"),
-        }
+        return {**meta, "status": status, "progress": progress, "reduce": reduce.get("status")}
 
 
 def from_env(store):

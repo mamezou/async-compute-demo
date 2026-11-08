@@ -22,9 +22,11 @@ flowchart LR
 
 | エンドポイント | 役割 |
 | --- | --- |
+| `GET /` | 画面。同期と非同期を同時に動かし、並列の進み具合、結果の一致、CloudWatch の数字を 1 枚で見る（色と部品は [GitHub Primer](https://primer.style/) の値に合わせている） |
 | `POST /simulate` | As-is の再現。API サーバーの中で計算し、終わるまで応答しない。同時に 1 件まで（超えたら 429）、計算量は 10 万パス × 250 日 × 20 資産まで（超えたら 422） |
 | `POST /jobs` | To-be。入力を S3 に置いてジョブを投入し、すぐ 202 とジョブ ID を返す |
-| `GET /jobs/{id}` | 状態確認。終わっていれば結果を返す |
+| `GET /jobs/{id}` | 状態確認。並列の内訳（待ち・計算中・完了の数）と、終わっていれば結果を返す |
+| `GET /metrics` | 画面のグラフ用。AWS では CloudWatch の GetMetricData で読む |
 
 ポイントは次の 4 つです。
 
@@ -43,6 +45,7 @@ pip install -r requirements.txt pytest httpx
 pytest -q
 
 uvicorn app.api:app --port 8000
+# ブラウザで http://localhost:8000/ を開くと画面が出る
 # 別のターミナルで
 curl -s -X POST localhost:8000/simulate -H 'content-type: application/json' -d '{"n_paths":100000}'
 curl -s -X POST localhost:8000/jobs     -H 'content-type: application/json' -d '{"n_paths":100000,"chunks":4}'

@@ -11,9 +11,12 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from app import backends, compute, metrics
@@ -62,6 +65,36 @@ def _params(req: SimulateRequest | JobRequest) -> compute.Params:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+_STATIC = Path(__file__).with_name("static")
+_PAGE = _STATIC / "index.html"
+app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def page() -> str:
+    """同期と非同期を並べて動かし、進み具合と CloudWatch の数字を見る画面。"""
+    return _PAGE.read_text(encoding="utf-8")
+
+
+@app.get("/config")
+def config() -> dict:
+    """画面が使う設定。上限と、AWS のコンソールへのリンク。"""
+    region = os.environ.get("AWS_REGION", "ap-northeast-1")
+    console = f"https://{region}.console.aws.amazon.com"
+    dashboard, queue = os.environ.get("DASHBOARD_NAME"), os.environ.get("BATCH_JOB_QUEUE")
+    return {
+        "sync_max_work": SYNC_MAX_WORK,
+        "on_aws": bool(queue),
+        "dashboard_url": f"{console}/cloudwatch/home?region={region}#dashboards:name={dashboard}" if dashboard else None,
+        "batch_jobs_url": f"{console}/batch/home?region={region}#jobs" if queue else None,
+    }
+
+
+@app.get("/metrics")
+def recent_metrics(minutes: int = Query(60, ge=5, le=180)) -> dict:
+    return metrics.recent(minutes)
 
 
 # 同期 API の限界を示すエンドポイント。

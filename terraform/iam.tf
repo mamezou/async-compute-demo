@@ -48,6 +48,10 @@ data "aws_iam_policy_document" "api" {
     actions   = ["batch:DescribeJobs"]
     resources = ["*"] # DescribeJobs はリソース指定ができない
   }
+  statement {
+    actions   = ["cloudwatch:GetMetricData"]
+    resources = ["*"] # 画面に CloudWatch の数字を出す。GetMetricData もリソース指定ができない
+  }
 }
 
 resource "aws_iam_role_policy" "api" {
