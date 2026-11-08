@@ -30,6 +30,13 @@ data "aws_iam_policy_document" "api" {
     actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.jobs.arn}/jobs/*"]
   }
+  # 結果がまだないことを確かめるのに要る。これがないと S3 は、ないオブジェクトに
+  # 404 ではなく 403 を返し、GET /jobs/{id} が実行中ずっと 500 になる（2026-11-08 に AWS で確認）。
+  # HeadObject には s3:prefix の条件が付かないので、接頭辞では絞らない。バケットはジョブ専用。
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.jobs.arn]
+  }
   statement {
     actions = ["batch:SubmitJob"]
     resources = [
