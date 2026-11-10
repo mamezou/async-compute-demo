@@ -8,19 +8,7 @@ CPU とメモリをよく使い、分割して並列にできる計算の例と�
 
 ## 構成
 
-```mermaid
-flowchart LR
-  U[利用者] --> ALB --> API["API層<br/>ECS Fargate + FastAPI<br/>リクエスト数でオートスケール"]
-  API -- "① 入力を保存 / ⑤ 結果を取得" --> S3[(S3)]
-  API -- "② 配列ジョブ＋集約ジョブを投入" --> Q[AWS Batch<br/>ジョブキュー]
-  Q -- "③ 起動（Fargate Spot 優先）" --> W["計算層<br/>chunk × N 並列"]
-  W -- "④ 途中結果を保存" --> S3
-  W --> R["集約ジョブ<br/>全 chunk 完了後に 1 回"]
-  R -- "結果を保存" --> S3
-  W & R -. "メトリクス（EMF）" .-> CW[CloudWatch<br/>ダッシュボード・アラーム]
-```
-
-AWS 上の配置です（編集元は `docs/architecture.drawio`）。
+編集元は `docs/architecture.drawio` です。
 
 ![AWS 構成図](docs/architecture.png)
 
