@@ -20,6 +20,12 @@ flowchart LR
   W & R -. "メトリクス（EMF）" .-> CW[CloudWatch<br/>ダッシュボード・アラーム]
 ```
 
+AWS 上の配置です（編集元は `docs/architecture.drawio`）。
+
+![AWS 構成図](docs/architecture.png)
+
+S1〜S2 が同期の経路で、計算は API のタスクの中で終わります。A1〜A8 が非同期の経路で、API は入力を S3 に置いてジョブを投入し（A2・A3）、配列ジョブの子が並列に計算して途中結果を S3 に置き（A5）、全部終わると集計ジョブが結果を S3 に置きます（A6・A7）。
+
 | エンドポイント | 役割 |
 | --- | --- |
 | `GET /` | 画面。同期と非同期を同時に動かし、並列の進み具合、結果の一致、CloudWatch の数字を 1 枚で見る（色と部品は [GitHub Primer](https://primer.style/) の値に合わせている） |
