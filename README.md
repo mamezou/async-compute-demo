@@ -1,5 +1,7 @@
 # async-compute-demo
 
+[English](README.en.md)
+
 API サーバーの中で動いている重い計算（NumPy / pandas）を、非同期ジョブに切り出して並列化するデモです。
 FastAPI、AWS Batch on Fargate、S3、CloudWatch を Terraform で構築します。
 
