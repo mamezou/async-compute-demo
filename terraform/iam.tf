@@ -45,8 +45,8 @@ data "aws_iam_policy_document" "api" {
     ]
   }
   statement {
-    actions   = ["batch:DescribeJobs"]
-    resources = ["*"] # DescribeJobs はリソース指定ができない
+    actions   = ["batch:DescribeJobs", "batch:ListJobs"]
+    resources = ["*"] # DescribeJobs と ListJobs（失敗した子ジョブの理由を取る）はリソース指定ができない
   }
   statement {
     actions   = ["cloudwatch:GetMetricData"]

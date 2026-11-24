@@ -224,7 +224,7 @@ async function runAsync(n, chunks){
         $('asyncState').textContent = '完了（ジョブ ' + job.job_id + '）'; $('asyncVar').textContent = s.summary.var_99.toFixed(6);
         return {sec: t, var99: s.summary.var_99, chunks: job.chunks};
       }
-      if(s.status === 'FAILED'){ stop(); $('asyncState').textContent = '失敗（ジョブ ' + job.job_id + '）'; return null; }
+      if(s.status === 'FAILED'){ stop(); $('asyncState').textContent = '失敗（ジョブ ' + job.job_id + '）' + (s.error && s.error.reason ? '：' + s.error.reason : ''); return null; }
       $('asyncState').textContent = (s.status === 'QUEUED' ? 'ワーカーの起動待ち' : p.total && p.succeeded === p.total ? '集約中' : '並列で計算中') + '（ジョブ ' + job.job_id + '）';
     }
   }catch(e){ stop(); $('asyncState').textContent = '通信エラー'; return null; }

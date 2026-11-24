@@ -47,7 +47,8 @@ class LocalBackend:
                 metrics.record("PeakMemory", r["peak_mb"], "chunk")
             worker.run_reduce(self.store, job_id, n_chunks)
         except Exception as e:  # noqa: BLE001  デモなので失敗内容をそのまま残す
-            meta = {"backend": "local", "status": "FAILED", "n_chunks": n_chunks, "error": repr(e)}
+            error = {"stage": "local", "reason": repr(e)}
+            meta = {"backend": "local", "status": "FAILED", "n_chunks": n_chunks, "error": error}
             st.put_json(self.store, st.meta_key(job_id), meta)
 
     def status(self, job_id: str) -> dict:
@@ -108,13 +109,44 @@ class BatchBackend:
             "failed": summary.get("FAILED", 0),
         }
         progress["waiting"] = n - progress["succeeded"] - progress["running"] - progress["failed"]
+        error = None
         if "FAILED" in (chunk.get("status"), reduce.get("status")) or progress["failed"]:
+            # 子ジョブが 1 つでも失敗したら、ほかの子ジョブの終了を待たずに FAILED を返す
             status = "FAILED"
+            error = self._failure(meta, chunk, reduce, n)
         elif progress["running"] or progress["succeeded"] or reduce.get("status") in ("STARTING", "RUNNING"):
             status = "RUNNING"
         else:
             status = "QUEUED"
-        return {**meta, "status": status, "progress": progress, "reduce": reduce.get("status")}
+        result = {**meta, "status": status, "progress": progress, "reduce": reduce.get("status")}
+        if error:
+            result["error"] = error
+        return result
+
+    def _failure(self, meta: dict, chunk: dict, reduce: dict, n_chunks: int) -> dict:
+        """失敗した理由。OOM なら reason に OutOfMemoryError が入る（PeakMemory は出ないので、ここで分かるようにする）。"""
+        if n_chunks > 1:
+            # 配列ジョブの親には理由が入らないので、失敗した子ジョブを 1 つ取って、その理由を返す
+            failed = self.batch.list_jobs(arrayJobId=meta["chunk_job"], jobStatus="FAILED", maxResults=1)["jobSummaryList"]
+            if failed:
+                child = failed[0]
+                return _error("chunk", child, child.get("arrayProperties", {}).get("index"))
+        elif chunk.get("status") == "FAILED":
+            return _error("chunk", chunk, 0)
+        return _error("reduce", reduce, None)
+
+
+def _error(stage: str, job: dict, index: int | None) -> dict:
+    """DescribeJobs と ListJobs のどちらの形からでも、理由と終了コードを取り出す。"""
+    container = job.get("container") or {}
+    return {
+        "stage": stage,
+        "batch_job_id": job.get("jobId"),
+        "index": index,
+        "status_reason": job.get("statusReason"),
+        "exit_code": container.get("exitCode"),
+        "reason": container.get("reason") or job.get("statusReason"),
+    }
 
 
 def from_env(store):
